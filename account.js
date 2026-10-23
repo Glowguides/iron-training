@@ -1,6 +1,6 @@
 import {ProgressSync} from './sync-engine.js';
 const byId=id=>document.getElementById(id),app=window.IRON;
-let client,user=null,debounce,initialized=false,authSerial=Promise.resolve(),offline=false,recovery=false;
+let client,user=null,debounce,initialized=false,authSerial=Promise.resolve(),offline=false,recovery=false,authMode='signin';
 const config=window.IRON_CONFIG||{};
 const key=id=>'iron-cloud-v1:'+id;
 const load=id=>{try{return JSON.parse(localStorage.getItem(key(id)))}catch{return null}};
@@ -24,7 +24,8 @@ function message(text){byId('authMessage').textContent=text;}
 function accountView(){
  byId('authForm').hidden=!!user;byId('signedIn').hidden=!user;
  byId('signedInEmail').textContent=user?.email||'';
- byId('accountNav').textContent=user?'My account':'Sign in';
+ byId('accountNav').textContent=user?'My account':'Account';
+ byId('headerGuest').hidden=!!user;byId('headerAccount').hidden=!user;
  byId('importGuest').hidden=!user||!app.hasGuestProgress();
 }
 async function changeUser(next){
@@ -58,20 +59,36 @@ byId('signOut').onclick=async()=>{
  if(engine.pending||engine.conflict){message('Save or export unsynced changes before signing out.');if(!confirm('Sign out with unsynced changes? They will remain in this account’s local cache on this device.'))return;}
  const {error}=await client.auth.signOut({scope:'local'});if(error){message(error.message);return;}await changeUser(null);
 };
+function setAuthMode(mode){
+ authMode=mode==='signup'?'signup':'signin';const signup=authMode==='signup';
+ byId('modeSignIn').setAttribute('aria-pressed',String(!signup));byId('modeSignUp').setAttribute('aria-pressed',String(signup));
+ byId('authHeading').textContent=signup?'Make every session count.':'Welcome back.';
+ byId('authHint').textContent=signup?'Create your free account to save your training across devices.':'Sign in to pick up your saved training journal.';
+ byId('authSubmit').textContent=signup?'Create account':'Sign in';
+ byId('authPassword').autocomplete=signup?'new-password':'current-password';
+ byId('authPassword').minLength=signup?12:1;byId('authPassword').placeholder=signup?'At least 12 characters':'Your password';
+ byId('authPassword').type='password';byId('showPassword').textContent='Show password';byId('showPassword').setAttribute('aria-pressed','false');
+ byId('forgotPassword').hidden=signup;message('');
+}
+function openAccount(mode){setAuthMode(mode);app.showTab('account');byId('account').scrollIntoView({behavior:'smooth',block:'start'});if(!user)byId('authEmail').focus({preventScroll:true});}
+document.querySelectorAll('[data-auth-mode]').forEach(button=>button.onclick=()=>openAccount(button.dataset.authMode));
+byId('headerAccount').onclick=()=>{app.showTab('account');byId('account').scrollIntoView({behavior:'smooth',block:'start'})};
+byId('showPassword').onclick=()=>{const show=byId('authPassword').type==='password';byId('authPassword').type=show?'text':'password';byId('showPassword').textContent=show?'Hide password':'Show password';byId('showPassword').setAttribute('aria-pressed',String(show))};
 function credentials(){const email=byId('authEmail').value.trim(),password=byId('authPassword').value;if(!byId('authEmail').reportValidity())return null;return {email,password};}
 function busy(value){document.querySelectorAll('#authForm button').forEach(b=>b.disabled=value)}
 byId('authForm').onsubmit=async e=>{
- e.preventDefault();const c=credentials();if(!c)return;if(!byId('authPassword').reportValidity())return;busy(true);message('Signing in…');
- try{const {data,error}=await client.auth.signInWithPassword(c);if(error)throw error;serializeUser(data.user);message('Signed in.');byId('authPassword').value='';}catch(error){message(error.message)}finally{busy(false)}
-};
-byId('createAccount').onclick=async()=>{
- const c=credentials();if(!c)return;if(!byId('authPassword').reportValidity())return;busy(true);message('Creating your account…');
- try{const {data,error}=await client.auth.signUp({...c,options:{emailRedirectTo:new URL('./',location.href).href}});if(error)throw error;
-  message(data.session?'Account created.':'Check your email to confirm your account, then sign in here.');if(data.session)serializeUser(data.user);byId('authPassword').value='';
+ e.preventDefault();if(!client){message('Sign-in is still connecting. Please try again in a moment.');return;}const c=credentials();if(!c)return;if(!byId('authPassword').reportValidity())return;
+ busy(true);const signup=authMode==='signup';message(signup?'Creating your account…':'Signing in…');
+ try{
+  const {data,error}=signup?await client.auth.signUp({...c,options:{emailRedirectTo:new URL('./',location.href).href}}):await client.auth.signInWithPassword(c);
+  if(error)throw error;
+  byId('authPassword').value='';
+  if(signup&&!data.session){setAuthMode('signin');message('Check your email to confirm your account, then sign in here.');}
+  else{serializeUser(data.user);message(signup?'Account created. Your journal is ready.':'Signed in.');}
  }catch(error){message(error.message)}finally{busy(false)}
 };
 byId('forgotPassword').onclick=async()=>{
- const c=credentials();if(!c)return;busy(true);
+ if(!client){message('Please wait for sign-in to connect.');return;}const c=credentials();if(!c)return;busy(true);
  try{const {error}=await client.auth.resetPasswordForEmail(c.email,{redirectTo:new URL('./',location.href).href});if(error)throw error;message('If the email is registered, a password-reset link will arrive.');}catch(error){message(error.message)}finally{busy(false)}
 };
 byId('passwordForm').onsubmit=async e=>{
@@ -96,4 +113,6 @@ async function boot(){
   const {data,error}=await client.auth.getSession();if(error)throw error;serializeUser(data.session?.user||null);
  }catch(error){byId('appContent').inert=false;document.querySelectorAll('#authForm button').forEach(b=>b.disabled=true);message('Sign-in needs a connection. Continue in guest mode and reload when online.');}
 }
+setAuthMode('signin');
+if(location.hash==='#signup'||location.hash==='#signin')openAccount(location.hash.slice(1));
 boot();
